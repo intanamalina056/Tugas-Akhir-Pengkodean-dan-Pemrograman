@@ -1,0 +1,64 @@
+SELECT
+  t.tahun,
+  ROUND(SUM(t.pendapatan) - SUM(t.beban_operasional + t.penyusutan), 0) AS laba_kena_pajak,
+  ROUND((SUM(t.pendapatan) - SUM(t.beban_operasional + t.penyusutan)) * k.tax_rate, 0) AS pph_badan,
+  ROUND(
+    (SUM(t.pendapatan) - SUM(t.beban_operasional + t.penyusutan)) -
+    ((SUM(t.pendapatan) - SUM(t.beban_operasional + t.penyusutan)) * k.tax_rate),
+    0
+  ) AS arus_kas_setelah_pajak
+FROM
+  `pph-badan-461308.PPh_Badan.transaksi_keuangan` t
+JOIN
+  `pph-badan-461308.PPh_Badan.kebijakan_fiskal` k
+ON
+  t.tahun = k.tahun
+WHERE
+  t.skenario = 'normal'
+GROUP BY
+  t.tahun, k.tax_rate
+ORDER BY
+  t.tahun;
+
+SELECT
+  t.tahun,
+  ROUND(SUM(t.pendapatan) - SUM(t.beban_operasional + t.penyusutan), 0) AS laba_kena_pajak,
+  CASE
+    WHEN t.tahun BETWEEN k.tax_holiday_awal AND k.tax_holiday_akhir THEN 0
+    ELSE ROUND((SUM(t.pendapatan) - SUM(t.beban_operasional + t.penyusutan)) * k.tax_rate, 0)
+  END AS pph_badan,
+  ROUND(SUM(t.pendapatan) - SUM(t.beban_operasional + t.penyusutan), 0) AS arus_kas_kena_pajak
+FROM
+  `pph-badan-461308.PPh_Badan.transaksi_keuangan` t
+JOIN
+  `pph-badan-461308.PPh_Badan.kebijakan_fiskal` k
+ON
+  t.tahun = k.tahun
+WHERE
+  t.skenario = 'tax_holiday'
+GROUP BY
+  t.tahun, k.tax_rate, k.tax_holiday_awal, k.tax_holiday_akhir
+ORDER BY
+  t.tahun;
+SELECT
+  aset_id,
+  kategori,
+  nilai_perolehan,
+  umur_ekonomis,
+  'garis_lurus' AS metode,
+  ROUND(nilai_perolehan / umur_ekonomis, 2) AS depresiasi_tahunan
+FROM
+  `pph-badan-461308.PPh_Badan.aset_tetap`
+WHERE
+  metode = 'garis_lurus';
+SELECT
+  aset_id,
+  kategori,
+  nilai_perolehan,
+  umur_ekonomis,
+  'saldo_menurun' AS metode,
+  ROUND(nilai_perolehan * 0.25, 2) AS depresiasi_tahun_pertama
+FROM
+  `pph-badan-461308.PPh_Badan.aset_tetap`
+WHERE
+  metode = 'saldo_menurun';
