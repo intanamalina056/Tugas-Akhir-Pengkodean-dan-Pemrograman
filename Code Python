@@ -1,0 +1,161 @@
+# Instal library tambahan jika belum
+!pip install -q matplotlib pandas openpyxl plotly
+
+# Import library
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import plotly.express as px
+from google.colab import files
+
+# Upload file CSV
+print("Silakan unggah ketiga file berikut secara bersamaan:")
+uploaded = files.upload()
+
+# Baca file CSV
+df_transaksi = pd.read_csv('transaksi_keuangan_sintetis.csv')
+df_aset = pd.read_csv('aset_tetap_sintetis.csv')
+df_pajak = pd.read_csv('kebijakan_fiskal_sintetis.csv')
+
+# Pastikan kolom laba_sebelum_pajak ada
+if 'laba_sebelum_pajak' not in df_transaksi.columns:
+    df_transaksi['laba_sebelum_pajak'] = df_transaksi['pendapatan'] - df_transaksi['beban_operasional'] - df_transaksi['penyusutan']
+
+# Ambil laba sebelum pajak per tahun
+laba_kotor = df_transaksi.set_index('tahun')['laba_sebelum_pajak'].to_dict()
+
+# Hitung depresiasi per aset
+def hitung_depresiasi(row):
+    nilai = row['nilai_perolehan']
+    umur = row['umur_ekonomis']
+    metode = row['metode']
+    hasil = {}
+
+    for tahun in range(5):  # Analisis selama 5 tahun
+        if metode == 'garis_lurus':
+            depresiasi = round(nilai / umur) if umur > 0 else 0
+        elif metode == 'saldo_menurun':
+            tarif = 2 / umur if umur > 0 else 0
+            sisa_nilai = nilai * ((1 - tarif) ** tahun)
+            depresiasi = round(sisa_nilai * tarif)
+        else:
+            depresiasi = 0
+        hasil[f"Tahun {tahun + 1}"] = depresiasi
+    return pd.Series(hasil)
+
+# Buat tabel depresiasi
+df_depresiasi = df_aset.apply(hitung_depresiasi, axis=1)
+df_depresiasi.insert(0, 'Aset_ID', df_aset['aset_id'])
+df_depresiasi.insert(1, 'Metode', df_aset['metode'])
+
+# Gabungkan depresiasi per metode
+df_depresiasi_total = df_depresiasi.groupby('Metode').sum().T.reset_index()
+df_depresiasi_total.columns.name = None
+
+# Lakukan analisis PPh Badan dalam 2 skenario: Normal & Tax Holiday
+analisis_data = []
+
+for tahun in sorted(laba_kotor.keys()):
+    laba = laba_kotor[tahun]
+
+    # Ambil tarif pajak dan info tax holiday
+    pajak_row = df_pajak[df_pajak['tahun'] == tahun]
+    tax_rate_normal = pajak_row['tax_rate'].values[0] if not pajak_row.empty else 0.22
+    th_awal = pajak_row['tax_holiday_awal'].values[0] if not pajak_row.empty else 0
+    th_akhir = pajak_row['tax_holiday_akhir'].values[0] if not pajak_row.empty else 0
+
+    # Skenario Normal
+    pph_normal = laba * tax_rate_normal
+
+    # Skenario Tax Holiday
+    if th_awal <= tahun <= th_akhir:
+        pph_tax_holiday = 0
+    else:
+        pph_tax_holiday = pph_normal
+
+    # Skenario Depresiasi
+    dep_index = f"Tahun {tahun - 2022}"  # Asumsi aset dibeli pada 2022
+    garis_lurus = df_depresiasi_total.loc[df_depresiasi_total['index'] == dep_index, 'garis_lurus'].values[0] if dep_index in df_depresiasi_total['index'].values else 0
+    saldo_menurun = df_depresiasi_total.loc[df_depresiasi_total['index'] == dep_index, 'saldo_menurun'].values[0] if dep_index in df_depresiasi_total['index'].values else 0
+
+    analisis_data.append([
+        tahun,
+        laba,
+        round(pph_normal),
+        round(pph_tax_holiday),
+        round(garis_lurus),  # Depresiasi Garis Lurus
+        round(saldo_menurun)  # Depresiasi Saldo Menurun
+    ])
+
+# Buat DataFrame hasil
+df_hasil = pd.DataFrame(analisis_data, columns=[
+    'Tahun', 'Laba Sebelum Pajak',
+    'PPh Normal', 'PPh Tax Holiday',
+    'Depresiasi Garis Lurus', 'Depresiasi Saldo Menurun'
+])
+
+# Simpan hasil ke CSV
+output_path = 'hasil_analisis_pph_badan.csv'
+df_hasil.to_csv(output_path, index=False)
+
+# Tampilkan tabel hasil
+print("\n📊 Hasil Analisis PPh Badan:")
+print(df_hasil)
+
+# --- VISUALISASI 1: PERBANDINGAN DEPRESIASI ---
+plt.figure(figsize=(10,6))
+plt.bar(df_hasil['Tahun'], df_hasil['Depresiasi Garis Lurus'], label='Garis Lurus', color='skyblue')
+plt.bar(df_hasil['Tahun'], df_hasil['Depresiasi Saldo Menurun'], label='Saldo Menurun', color='orange', bottom=df_hasil['Depresiasi Garis Lurus'])
+plt.title('Perbandingan Nilai Depresiasi')
+plt.xlabel('Tahun')
+plt.ylabel('Depresiasi (Rp)')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# --- VISUALISASI 2: LINE CHART INTERAKTIF DENGAN PLOTLY ---
+fig_interaktif = px.line(
+    df_hasil,
+    x='Tahun',
+    y=['PPh Normal', 'PPh Tax Holiday'],
+    title='Simulasi PPh Badan (Interaktif)',
+    labels={'value': 'Nilai PPh (Rp)', 'variable': 'Skenario'}
+)
+fig_interaktif.update_traces(mode='markers+lines')
+fig_interaktif.show()
+
+# --- VISUALISASI 3: 3D SCATTER PLOT (NORMAL & TAX HOLIDAY) ---
+fig = plt.figure(figsize=(10,7))
+ax = fig.add_subplot(111, projection='3d')
+
+x = df_hasil['Tahun']
+y = df_hasil['Laba Sebelum Pajak']
+z1 = df_hasil['PPh Normal']
+z2 = df_hasil['PPh Tax Holiday']
+
+# Plot Normal
+scatter1 = ax.scatter(x, y, z1, c='blue', marker='o', label='Skenario Normal')
+# Plot Tax Holiday
+scatter2 = ax.scatter(x, y, z2, c='green', marker='^', label='Skenario Tax Holiday')
+
+ax.set_xlabel('Tahun')
+ax.set_ylabel('Laba Sebelum Pajak')
+ax.set_zlabel('PPh Badan')
+plt.title('Visualisasi 3D: Laba, Tahun, dan PPh Badan')
+plt.legend()
+plt.show()
+
+# --- VISUALISASI 4: PIE CHART - NILAI ASET TETAP ---
+labels = df_aset['kategori']
+sizes = df_aset['nilai_perolehan']
+
+plt.figure(figsize=(8,8))
+plt.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140)
+plt.title('Komposisi Nilai Aset Tetap')
+plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+plt.show()
+
+# --- DOWNLOAD FILE HASIL ---
+files.download(output_path)
